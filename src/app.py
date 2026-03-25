@@ -1,6 +1,7 @@
 """
 Streamlitフロントエンド - 本のメモ分析チャットUI
 """
+from datetime import datetime
 import streamlit as st
 from ai_processor import BookInsightProcessor
 
@@ -25,6 +26,24 @@ def initialize_processor():
         st.error(f"AI プロセッサの初期化に失敗しました: {str(e)}")
         st.info("AWS認証情報が正しく設定されているか確認してください")
         return False
+
+
+def generate_filename() -> str:
+    """ダウンロード用のファイル名を生成"""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"book_insight_{timestamp}.md"
+
+
+def show_download_button(content: str, key: str):
+    """ダウンロードボタンを表示"""
+    st.download_button(
+        label="📥 Markdownでダウンロード",
+        data=content,
+        file_name=generate_filename(),
+        mime="text/markdown",
+        key=key,
+        use_container_width=True
+    )
 
 
 def main():
@@ -64,12 +83,8 @@ def main():
         1. 本のメモをテキストエリアに入力
         2. 「分析」ボタンをクリック
         3. AIが事実・意見・行動を整理
+        4. 必要に応じて結果をダウンロード
         """)
-
-        # 会話履歴のクリア
-        if st.button("🗑️ 会話履歴をクリア", use_container_width=True):
-            st.session_state.messages = []
-            st.rerun()
 
     # メインエリア
     # プロセッサの初期化チェック
@@ -77,54 +92,71 @@ def main():
         if not initialize_processor():
             st.stop()
 
-    # 会話履歴の表示
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+    # シングルターン: 結果がある場合と入力フォームを分ける
+    if st.session_state.messages:
+        # 最新の分析結果の表示
+        for idx, message in enumerate(st.session_state.messages):
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
 
-    # ユーザー入力
-    st.divider()
-    st.subheader("📝 本のメモを入力")
+                # アシスタントメッセージにはダウンロードボタンを追加
+                if message["role"] == "assistant" and not message["content"].startswith("エラーが発生しました"):
+                    st.divider()
+                    show_download_button(
+                        content=message["content"],
+                        key=f"download_history_{idx}"
+                    )
 
-    with st.form("memo_form", clear_on_submit=True):
-        memo = st.text_area(
-            "メモの内容",
-            height=200,
-            placeholder="本のメモをここに入力してください...\n\n例:\n・習慣は小さく始めることが重要\n・著者は2分ルールを推奨している\n・習慣化には平均66日かかる研究結果がある"
-        )
+        # 新しい分析を実行する案内
+        st.divider()
+        st.info("💡 新しい分析を実行する場合は、ブラウザを再読み込み（F5キー）してください。")
+    else:
+        # ユーザー入力フォームを表示
+        st.divider()
+        st.subheader("📝 本のメモを入力")
 
-        submitted = st.form_submit_button("📊 分析", use_container_width=True)
+        with st.form("memo_form", clear_on_submit=True):
+            memo = st.text_area(
+                "メモの内容",
+                height=200,
+                placeholder="本のメモをここに入力してください...\n\n例:\n・習慣は小さく始めることが重要\n・著者は2分ルールを推奨している\n・習慣化には平均66日かかる研究結果がある"
+            )
 
+            submitted = st.form_submit_button("📊 分析", use_container_width=True)
+
+        # フォームの外で分析処理を実行
         if submitted and memo:
-            # ユーザーメッセージを追加
-            st.session_state.messages.append({
-                "role": "user",
-                "content": memo
-            })
+            # シングルターン: 新しい分析を開始する前に前の結果をクリア
+            st.session_state.messages = []
 
-            # ユーザーメッセージを表示
-            with st.chat_message("user"):
-                st.markdown(memo)
+            # AI処理（表示は会話履歴表示部分に任せる）
+            with st.spinner("分析中..."):
+                try:
+                    # ユーザーメッセージを追加
+                    st.session_state.messages.append({
+                        "role": "user",
+                        "content": memo
+                    })
 
-            # AI処理
-            with st.chat_message("assistant"):
-                with st.spinner("分析中..."):
-                    try:
-                        response = st.session_state.processor.process_memo(memo)
-                        st.markdown(response)
+                    # AI分析を実行
+                    response = st.session_state.processor.process_memo(memo)
 
-                        # アシスタントメッセージを追加
-                        st.session_state.messages.append({
-                            "role": "assistant",
-                            "content": response
-                        })
-                    except Exception as e:
-                        error_msg = f"エラーが発生しました: {str(e)}"
-                        st.error(error_msg)
-                        st.session_state.messages.append({
-                            "role": "assistant",
-                            "content": error_msg
-                        })
+                    # アシスタントメッセージを追加
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": response
+                    })
+
+                    # 再レンダリングして結果を表示
+                    st.rerun()
+
+                except Exception as e:
+                    error_msg = f"エラーが発生しました: {str(e)}"
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": error_msg
+                    })
+                    st.rerun()
 
 
 if __name__ == "__main__":
